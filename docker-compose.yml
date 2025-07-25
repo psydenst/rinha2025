@@ -1,0 +1,101 @@
+
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: rinha-nginx
+    volumes:
+      - ./staticfiles/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api1
+      - api2
+    ports:
+      - "9999:9999"
+    networks:
+      - backend
+      - payment-processor
+    restart: on-failure:5
+    mem_limit: 15m
+    cpus: 0.15
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: "15MB"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api1: &api
+    build: ./backend
+    container_name: rinha-api1
+    hostname: api1
+    env_file:
+      - .env
+    environment:
+      - INSTANCE_ID=API-1
+    command: ["node", "dist/server.js"]   # ou src/server.js se estiver rodando TS direto
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - backend
+      - payment-processor
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: on-failure:5
+    mem_limit: 30m
+    cpus: 0.55
+    deploy:
+      resources:
+        limits:
+          cpus: "0.55"
+          memory: "30MB"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api2:
+    <<: *api
+    container_name: rinha-api2
+    hostname: api2
+    environment:
+      - INSTANCE_ID=API-2
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: rinha-redis
+    command: redis-server --save "" --appendonly no --maxclients 20000
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: on-failure:5
+    mem_limit: 275m
+    cpus: 0.25
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "275MB"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  backend:
+    driver: bridge
+  payment-processor:
+    external: true
+

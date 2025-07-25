@@ -1,0 +1,21 @@
+{
+  "name": "rinha-backend-node",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "npm run build && node src/server.ts"
+  },
+  "dependencies": {
+    "@types/node": "^20.11.0",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.27.2",
+    "ioredis": "^5.3.2",
+    "typescript": "^5.4.0",
+    "undici": "^6.18.1"
+  },
+  "devDependencies": {
+    "undici-types": "^7.12.0"
+  }
+}
