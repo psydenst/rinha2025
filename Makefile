@@ -1,14 +1,18 @@
 all:
 	@printf "Launch configuration $(name)...\n"
+	@cd payment-processor && docker compose up -d
 	@docker compose up -d
 
 re:
 	@printf "Rebuild configuration $(name)...\n"
+	@cd payment-processor && docker compose build --no-cache
+	@cd payment-processor && docker compose up -d
 	@docker compose build --no-cache
 	@docker compose up -d
 
 down:
 	@printf "Stopping configuration $(name)...\n"
+	@cd payment-processor && docker compose down
 	@docker compose down
 
 clean: down

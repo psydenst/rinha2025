@@ -1,19 +1,18 @@
-// server.ts
-
-import http, {IncomingMessage, ServerResponse} from 'http';
-import healthcheck from './healthcheck.js'
-
-const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
-	if (healthcheck(req, res))
-		return;
-
-	res.writeHead(404, { 'Content-Type': 'application/json' });
-	res.end(JSON.stringify({ error: 'Not Found' }));
-});
-
-const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
-server.listen(PORT, () => {
-	console.log(`Server is running on port ${PORT}`);
-});
+import Fastify from 'fastify';
+import healthcheck from './healthcheck.js'; // Import the healthcheck plugin
 
 
+const server = Fastify(); // Create a Fastify server instance
+server.register(healthcheck); // Register healthcheck routes
+
+const start = async () => {
+	try {
+		await server.listen({ port : 8080, host: '0.0.0.0'});
+		console.log('Server listening at http://localhost:9999');
+	} catch (err) {
+		server.log.error(err);
+		process.exit(1);
+	}
+}
+
+start (); // Starts the server
