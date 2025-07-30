@@ -14,18 +14,17 @@ async function checkHealth(url: string): Promise<boolean>
 			return false; // Otherwise, return false
 }
 
+export async function healthcheck1() {
+  return {healthy: await checkHealth('http://payment-processor-1:8080/payments/service-health')};
+}
+
+export async function healthcheck2() {
+  return {healthy: await checkHealth('http://payment-processor-2:8080/payments/service-health')};
+}
+
 // Checks both payments services health, returns boolean. 
 export default async function (fastify: FastifyInstance) {
-// Checks payments services default health, returns boolean. 
-	fastify.get('/healthcheck1', async () => {
-		const healthy = await checkHealth('http://payment-processor-1:8080/payments/service-health');
-		return { healthy };
-	});
-// Checks payments services fallback health, returns boolean. 
-	fastify.get('/healthcheck2', async () => {
-	const healthy = await checkHealth('http://payment-processor-2:8080/payments/service-health');
-	return { healthy };
-	});
-
+  fastify.get('/healthcheck1', async () => await healthcheck1());
+  fastify.get('/healthcheck2', async () => await healthcheck2());
 }
 

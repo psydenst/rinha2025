@@ -14,13 +14,11 @@ services:
       - backend
       - payment-processor
     restart: on-failure:5
-    mem_limit: 15m
-    cpus: 0.15
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: "15MB"
+          cpus: "0.10"
+          memory: "10MB"
     logging:
       driver: "json-file"
       options:
@@ -35,12 +33,9 @@ services:
       - .env
     environment:
       - INSTANCE_ID=API-1
+      - REDIS_HOST=rinha-redis
+      - REDIS_PORT=6379
     command: ["node", "dist/server.js"]   # ou src/server.js se estiver rodando TS direto
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
     networks:
       - backend
       - payment-processor
@@ -48,13 +43,11 @@ services:
       redis:
         condition: service_healthy
     restart: on-failure:5
-    mem_limit: 30m
-    cpus: 0.55
     deploy:
       resources:
         limits:
-          cpus: "0.55"
-          memory: "30MB"
+          cpus: "0.45"
+          memory: "96MB"
     logging:
       driver: "json-file"
       options:
@@ -67,6 +60,8 @@ services:
     hostname: api2
     environment:
       - INSTANCE_ID=API-2
+      - REDIS_HOST=rinha-redis
+      - REDIS_PORT=6379
 
   redis:
     image: redis:7.2-alpine
@@ -80,13 +75,11 @@ services:
       timeout: 5s
       retries: 5
     restart: on-failure:5
-    mem_limit: 275m
-    cpus: 0.25
     deploy:
       resources:
         limits:
           cpus: "0.25"
-          memory: "275MB"
+          memory: "128MB"
     logging:
       driver: "json-file"
       options:

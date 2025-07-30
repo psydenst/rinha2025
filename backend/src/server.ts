@@ -1,9 +1,14 @@
 import Fastify from 'fastify';
 import healthcheck from './healthcheck.js'; // Import the healthcheck plugin
+import payments from './payments.js'; // Import the payments plugin
+import summary from './summary.js'; // Import the summary plugin
 
+const server = Fastify({
+	logger: true
+}); // Create a Fastify server instance
 
-const server = Fastify(); // Create a Fastify server instance
 server.register(healthcheck); // Register healthcheck routes
+server.register(payments); // Register payments routes
 
 const start = async () => {
 	try {
