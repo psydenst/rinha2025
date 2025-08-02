@@ -15,11 +15,11 @@ async function checkHealth(url: string): Promise<boolean>
 }
 
 export async function healthcheck1() {
-  return {healthy: await checkHealth('http://payment-processor-1:8080/payments/service-health')};
+  return {healthy: await checkHealth('http://host.docker.internal:8001/payments/service-health')};
 }
 
 export async function healthcheck2() {
-  return {healthy: await checkHealth('http://payment-processor-2:8080/payments/service-health')};
+  return {healthy: await checkHealth('http://host.docker.internal:8002/payments/service-health')};
 }
 
 // Checks both payments services health, returns boolean. 

@@ -14,6 +14,7 @@ export interface QueuedPayment extends PaymentBody {
   delay: number;
   originalRequestTime: number;
   requestedAt: string; // para os processors
+	registerSuccess?: boolean; // usado para registrar sucesso no summary
 }
 
 export interface QueueStats {
@@ -23,15 +24,16 @@ export interface QueueStats {
   retries: number;
 }
 
+
 // Configurações da fila
 const QUEUE_MAX_SIZE = 5000; // reduzido de 10k para 5k
-const QUEUE_PROCESS_INTERVAL = 3000; // 3 segundos - muito mais econômico
-const QUEUE_BATCH_SIZE = 10; // processar no máximo 10 pagamentos por vez
+const QUEUE_PROCESS_INTERVAL = 0; // --> 0ms instantaneo
+const QUEUE_BATCH_SIZE = 1; // processar no máximo 1 pagamentos por vez --> instantaneo
 const QUEUE_MAX_RETRIES = 3; // reduzido de 5 para 3
-const QUEUE_INITIAL_DELAY = 2000; // 2s
-const QUEUE_MAX_DELAY = 60000; // 60s (aumen
-const QUEUE_BACKOFF_MULTIPLIER = 2;
-const REQUEST_TIMEOUT = 5000; // 5s timeout
+const QUEUE_INITIAL_DELAY = 0; // 10ms
+const QUEUE_MAX_DELAY = 0; // 30ms
+const QUEUE_BACKOFF_MULTIPLIER = 1.2;
+const REQUEST_TIMEOUT = 1450; // 5s timeout
 const QUEUE_IDLE_THRESHOLD = 30000; // 30s - parar processador se fila vazia por muito tempo
 
 // Estado da fila
@@ -45,7 +47,7 @@ let queueStats: QueueStats = {
   retries: 0
 };
 
-// Função para fazer request (simplificada para a fila)
+// Função para fazer request
 async function makeQueueRequest(
   url: string,
   payload: PaymentBody & { requestedAt: string },
@@ -64,19 +66,17 @@ async function makeQueueRequest(
 
     clearTimeout(timeoutId);
 
-    if (resp.ok) {
-      const data = await resp.json();
+		const data = await resp.json() as { message: string };
+
+    if (resp.status >= 200 && resp.status < 300) {
+			// logger.info(`succes ${payload.correlationId} ${resp.status} data: ${data.message}`);
       return { success: true, response: data, status: resp.status };
-    } else if (resp.status >= 500) {
-      logger.warn(`Queue request returned ${resp.status} for ${payload.correlationId}`);
-      return { success: false };
     } else {
-      // Client error (4xx) - não tentar novamente
-      const data = await resp.json();
-      return { success: true, response: data, status: resp.status };
-    }
-  } catch (error) {
-    logger.error(`Queue request failed for ${payload.correlationId}:`, error);
+      // logger.warn(`Queue request returned ${resp.status} for ${payload.correlationId}`);
+      return { success: false };
+ 			}
+	} catch (error) {
+   //  logger.error(`Queue request failed for ${payload.correlationId}:`, error);
     return { success: false };
   }
 }
@@ -95,7 +95,8 @@ export function queuePayment(payment: PaymentBody): string {
     lastAttempt: 0,
     maxRetries: QUEUE_MAX_RETRIES,
     delay: QUEUE_INITIAL_DELAY,
-    originalRequestTime: Date.now()
+    originalRequestTime: Date.now(),
+		registerSuccess: false
   };
 
   paymentQueue.push(queuedPayment);
@@ -110,106 +111,78 @@ export function queuePayment(payment: PaymentBody): string {
   return queuedPayment.id;
 }
 
-// Processar um pagamento da fila
+
 async function processQueuedPayment(
   payment: QueuedPayment,
-  healthCheck: () => Promise<{p1: boolean; p2: boolean}>,
+  healthCheck: () => Promise<{ p1: boolean; p2: boolean }>,
   logger: any = console
 ): Promise<boolean> {
   const now = Date.now();
-  
-  // Verificar se já passou o delay necessário
-  if (now - payment.lastAttempt < payment.delay) {
-    return false; // não é hora de tentar ainda
-  }
+  if (now - payment.lastAttempt < payment.delay) return false;
 
   payment.attempts++;
   payment.lastAttempt = now;
-  
-  logger.info(`Processing queued payment ${payment.id}, attempt ${payment.attempts}/${payment.maxRetries}`);
+  // logger.info(`Processing queued payment ${payment.id}, attempt ${payment.attempts}/${payment.maxRetries}`);
 
-  // Verificar health dos processadores
   const { p1, p2 } = await healthCheck();
-  
-  // Definir ordem de prioridade: default primeiro, depois fallback
-  const processorsToTry: Array<{url: string, type: 'default' | 'fallback'}> = [];
-  
-  if (p1) {
-    processorsToTry.push({
-      url: 'http://payment-processor-1:8080/payments',
-      type: 'default'
-    });
-  }
-  if (p2) {
-    processorsToTry.push({
-      url: 'http://payment-processor-2:8080/payments', 
-      type: 'fallback'
-    });
-  }
-  
-  // Se nenhum healthy, tentar ambos mesmo assim (manter ordem de prioridade)
-  if (processorsToTry.length === 0) {
+  const processorsToTry: Array<{ url: string; type: 'default' | 'fallback' }> = [];
+  if (p1) processorsToTry.push({ url: 'http://host.docker.internal:8001/payments', type: 'default' });
+  if (p2) processorsToTry.push({ url: 'http://host.docker.internal:8002/payments', type: 'fallback' });
+  if (!processorsToTry.length) {
     processorsToTry.push(
-      {
-        url: 'http://payment-processor-1:8080/payments',
-        type: 'default'
-      },
-      {
-        url: 'http://payment-processor-2:8080/payments',
-        type: 'fallback'
-      }
+      { url: 'http://host.docker.internal:8001/payments', type: 'default' },
+      { url: 'http://host.docker.internal:8002/payments', type: 'fallback' }
     );
   }
-  
-  // Tentar processadores na ordem de prioridade
+
   for (const processor of processorsToTry) {
     const result = await makeQueueRequest(processor.url, {
       correlationId: payment.correlationId,
       amount: payment.amount,
       requestedAt: payment.requestedAt
     }, logger);
-    
-    if (result.success) {
-      logger.info(`Queued payment ${payment.id} processed successfully on ${processor.type} after ${payment.attempts} attempts`);
-      queueStats.processed++;
-      
-      // 🎯 REGISTRAR NO SUMMARY COM O PROCESSOR CORRETO
-      try {
-        // Import dinâmico para evitar circular dependency
-        const summaryModule = await import('./summary.js');
-        await summaryModule.registerPayment(processor.type, payment.amount);
-        logger.info(`Registered queued payment ${payment.id} as ${processor.type}: R$ ${payment.amount}`);
-      } catch (error) {
-        logger.error(`Failed to register queued payment ${payment.id}:`, error);
-        // Mesmo se falhar o registro, consideramos sucesso no processamento
-      }
-      
-      return true; // sucesso - remover da fila
-    } else {
-      logger.warn(`Queued payment ${payment.id} failed on ${processor.type} processor`);
+
+		logger.info('result of makeQueueRequest', result);
+    if (!result.success) {
+      // logger.warn(`Payment ${payment.id} failed on ${processor.type}`);
+      continue;
     }
+
+    // logger.info(`Payment ${payment.id} succeeded on ${processor.type}`);
+		// Condição para evitar duplo registro
+    if (!payment.registerSuccess && result.success === true) {
+      try {
+        const summaryModule = await import('./summary.js');
+        await summaryModule.registerPayment(processor.type, payment.amount, payment.correlationId);
+        payment.registerSuccess = true;
+        // logger.info(`Registered summary for payment ${payment.id}`);
+      } catch (error) {
+        // logger.error(`Summary registration error for payment ${payment.id}:`, error);
+        // Não remove da fila; tentará novamente registrar na próxima iteração
+        return false;
+      }
+    }
+
+    // Só remove da fila após registro bem-sucedido ou já registrado
+    queueStats.processed++;
+    return true;
   }
 
-  // Falhou em todos os processadores - verificar se deve tentar novamente
+  // Lógica de retry/backoff
   if (payment.attempts >= payment.maxRetries) {
-    logger.error(`Queued payment ${payment.id} failed permanently after ${payment.attempts} attempts on all processors`);
+    // logger.error(`Payment ${payment.id} permanently failed after ${payment.attempts} attempts`);
     queueStats.failed++;
-    return true; // remover da fila (falha permanente)
+    return true;
   }
 
-  // Aumentar delay para próxima tentativa (exponential backoff)
-  payment.delay = Math.min(
-    payment.delay * QUEUE_BACKOFF_MULTIPLIER, 
-    QUEUE_MAX_DELAY
-  );
-  
+  payment.delay = Math.min(payment.delay * QUEUE_BACKOFF_MULTIPLIER, QUEUE_MAX_DELAY);
   queueStats.retries++;
-  logger.warn(`Queued payment ${payment.id} failed on all available processors, will retry in ${payment.delay}ms`);
-  
-  return false; // manter na fila para retry
+  // logger.warn(`Will retry payment ${payment.id} in ${payment.delay}ms`);
+  return false;
 }
 
-// Iniciar processador da fila - OTIMIZADO PARA RECURSOS LIMITADOS
+
+// Iniciar processador da fila
 function startQueueProcessor() {
   if (queueProcessorRunning) return;
   
@@ -219,7 +192,7 @@ function startQueueProcessor() {
     // Auto-shutdown se fila vazia por muito tempo (economizar recursos)
     if (paymentQueue.length === 0) {
       if (Date.now() - lastQueueActivity > QUEUE_IDLE_THRESHOLD) {
-        console.log('Queue processor stopping due to inactivity');
+        // console.log('Queue processor stopping due to inactivity');
         queueProcessorRunning = false;
         return;
       }
@@ -276,16 +249,16 @@ function startQueueProcessor() {
           remainingPayments.unshift(payment); // recolocar no início
         }
       } catch (error) {
-        console.error(`Error processing queued payment ${payment.id}:`, error);
+        // console.error(`Error processing queued payment ${payment.id}:`, error);
         remainingPayments.unshift(payment); // manter na fila em caso de erro
       }
     }
     
     paymentQueue = remainingPayments;
-    
+    /*
     if (processedInBatch > 0) {
-      console.log(`Queue batch processed: ${processedInBatch} payments, ${paymentQueue.length} remaining`);
-    }
+      // console.log(`Queue batch processed: ${processedInBatch} payments, ${paymentQueue.length} remaining`);
+    } */
     
     // Intervalo adaptativo: se processou algo, próximo batch mais rápido
     const nextInterval = processedInBatch > 0 ? 

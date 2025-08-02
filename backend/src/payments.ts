@@ -65,9 +65,9 @@ type ProcessorStats = {
 }
 
 const HEALTH_TTL = 5_000; // 5 seconds
-const CIRCUIT_BREAKER_THRESHOLD = 20; // number of failures before circuit opens
-const CIRCUIT_BREAKER_TIMEOUT = 10_000; // 30 seconds before circuit resets
-const REQUEST_TIMEOUT = 10_000; // 5 seconds timeout for requests
+const CIRCUIT_BREAKER_THRESHOLD = 4; // number of failures before circuit opens
+const CIRCUIT_BREAKER_TIMEOUT = 10_000; // 10 seconds before circuit resets
+const REQUEST_TIMEOUT = 3_000; // 3 seconds timeout for requests
 const MAX_RETRIES = 2; // maximum number of retries for requests
 
 let healthCache: HealthCache = {last: 0, p1: false, p2: false};
@@ -286,30 +286,30 @@ export default async function payments(fastify: FastifyInstance) {
 
     if (p1) {
 			const result = await makeRequest(
-				'http://payment-processor-1:8080/payments',
+				'http://host.docker.internal:8001/payments',
 				{ correlationId, amount, requestedAt },
 				processor1Stats,
 				'Payment Processor 1',
 				req.log
 			);
 
-			if (result.success) {
-				await registerPayment('default', amount);
+			if (result.success && result.status && result.status >= 200 && result.status < 300) {
+				await registerPayment('default', amount, correlationId);
 				return reply.code(result.status || 200).send(result.response);
 			}
     }
 
     if (p2) {
 			const result = await makeRequest(
-				'http://payment-processor-2:8080/payments',
+				'http://host.docker.internal:8002/payments',
 				{ correlationId, amount, requestedAt },
 				processor2Stats,
 				'Payment Processor 2',
 				req.log
 			);
 
-			if (result.success) {
-				await registerPayment('fallback', amount);
+			if (result.success && result.status && result.status >= 200 && result.status < 300) {
+				await registerPayment('fallback', amount, correlationId);
 				return reply.code(result.status || 200).send(result.response);
     	}
 		}

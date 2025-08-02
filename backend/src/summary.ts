@@ -19,48 +19,91 @@ redis.on('error', (err) => {
  */
 export async function registerPayment(
   processor: 'default' | 'fallback',
-  amount: number
+  amount: number,
+	correlationId: string
 ) {
+	// Verifica se o pagamento já foi registrado
+	const key = `payment:${correlationId}`;
+	if (await redis.exists(key)) {
+		console.info(`Summary: payment ${key} already registered, skipping.`);
+		return;
+	}
+	// Registra o pagamento no Redis
   const timestamp = Date.now();
-  await redis.zadd(`payments:${processor}`, timestamp, amount.toString());
+  await redis.hset(
+	 `payment:${correlationId}`,
+	 {// 1) chave do hash
+		processor: processor,
+		amount: amount,
+		correlationId: correlationId,
+		timestamp: timestamp.toString(),
+		}
+	);
 }
 
-/**
- * Summary endpoint: returns counts and sums between optional 'from' and 'to' ISO timestamps.
- */
 export default async function summary(fastify: FastifyInstance) {
-
-	fastify.addHook('onSend', async (req, reply, payload) => {
-	reply.header('X-Service', 'rinha-payments-api');
-	});
-
-	fastify.get('/payments-summary', async (
-    req: FastifyRequest<{ Querystring: { from?: string; to?: string } }>,
-    reply: FastifyReply
-  ) => {
-    const { from, to } = req.query;
-    const minScore = from ? new Date(from).getTime() : '-inf';
-    const maxScore = to ? new Date(to).getTime() : '+inf';
-
-    // Default processor stats
-    const defaultCount = await redis.zcount('payments:default', minScore, maxScore);
-    const defaultAmounts = await redis.zrangebyscore('payments:default', minScore, maxScore);
-    const defaultTotal = defaultAmounts.reduce((sum, value) => sum + parseFloat(value), 0);
-
-    // Fallback processor stats
-    const fallbackCount = await redis.zcount('payments:fallback', minScore, maxScore);
-    const fallbackAmounts = await redis.zrangebyscore('payments:fallback', minScore, maxScore);
-    const fallbackTotal = fallbackAmounts.reduce((sum, value) => sum + parseFloat(value), 0);
-
-    return reply.send({
-      default: {
-        totalRequests: defaultCount,
-        totalAmount: Number(defaultTotal.toFixed(2)),
-      },
-      fallback: {
-        totalRequests: fallbackCount,
-        totalAmount: Number(fallbackTotal.toFixed(2)),
-      }
-    });
+  fastify.addHook('onSend', async (_req, reply, _payload) => {
+    reply.header('X-Service', 'rinha-payments-api');
   });
+
+  fastify.get(
+    '/payments-summary',
+    async (
+      req: FastifyRequest<{ Querystring: { from?: string; to?: string } }>,
+      reply: FastifyReply
+    ) => {
+      const { from, to } = req.query;
+      const minTs = from ? new Date(from).getTime() : -Infinity;
+      const maxTs = to ? new Date(to).getTime() : Infinity;
+
+      // Inicializa agrupamentos
+      const defaultGroup = {
+        totalRequests: 0,
+        totalAmount: 0,
+        correlationIds: [] as string[],
+      };
+      const fallbackGroup = {
+        totalRequests: 0,
+        totalAmount: 0,
+        correlationIds: [] as string[],
+      };
+
+      // Busca todas as chaves de pagamento
+      const keys = await redis.keys('payment:*');
+      for (const key of keys) { 
+        const data = await redis.hgetall(key);
+        const ts = parseInt(data.timestamp, 10);
+        if (isNaN(ts) || ts < minTs || ts > maxTs) continue; // se não for número ou fora do intervalo, pula
+
+        const amount = parseFloat(data.amount);
+        const id = data.correlationId;
+        const processor = data.processor as 'default' | 'fallback';
+
+        if (processor === 'default') {
+          defaultGroup.totalRequests += 1;
+          defaultGroup.totalAmount += amount;
+          defaultGroup.correlationIds.push(id);
+        } else if (processor === 'fallback') {
+          fallbackGroup.totalRequests += 1;
+          fallbackGroup.totalAmount += amount;
+          fallbackGroup.correlationIds.push(id);
+        }
+      }
+
+      // Ajusta formatação dos valores, 2 casas decimais
+      defaultGroup.totalAmount = Number(defaultGroup.totalAmount.toFixed(2));
+      fallbackGroup.totalAmount = Number(fallbackGroup.totalAmount.toFixed(2));
+
+      return reply.send({
+        default: {
+					totalRequests: defaultGroup.totalRequests,
+					totalAmount: defaultGroup.totalAmount,
+				},
+        fallback: {
+					totalRequests: fallbackGroup.totalRequests,
+					totalAmount: fallbackGroup.totalAmount,
+				},
+      });
+    }
+  );
 }
